@@ -54,54 +54,51 @@ DB_CONFIGS = {
     # Add more database configurations as needed
 }
 
-# Global variables
-db_connection = None
-embedding_model = None
-index = None
-keys = None
-current_database = None  # Keep track of the currently selected database
-
+# --- REMOVED GLOBAL VARIABLES FOR DB_CONNECTION, EMBEDDING_MODEL, INDEX, KEYS, CURRENT_DATABASE ---
+# These will now be loaded per request based on the db_name passed in the request.
 
 def get_db_connection(db_name):
     """
-    Returns a database connection object for the given database name.
-    If a connection already exists for the same database, it is reused.
+    Returns a new database connection object for the given database name.
+    Each call to this function will create a new connection.
+    Connections should be closed in the finally block of the route.
     """
-    global db_connection, current_database
-
-    if db_connection and current_database == db_name:
-        return db_connection
-
-    if db_connection:
-        db_connection.close()  # Close previous connection
-
     config = DB_CONFIGS[db_name]
     try:
-        db_connection = pymysql.connect(
+        connection = pymysql.connect(
             host=config["host"],
             user=config["user"],
             password=config["password"],
             database=config["database"],
         )
-        current_database = db_name  # Update the current database
-        return db_connection
+        return connection
     except pymysql.Error as e:
         raise Exception(f"Error connecting to database '{db_name}': {e}")
 
 
-def load_model_and_index(db_name):
-    """Loads the Sentence Transformer model and FAISS index for the given database."""
-    global embedding_model, index, keys
+_model_cache = {}
+_index_cache = {}
+_keys_cache = {}
 
-    # Check if the model and index are already loaded for the current database
-    if embedding_model and index and keys and current_database == db_name:
-        return embedding_model, index, keys
+def load_model_and_index(db_name):
+    """
+    Loads the Sentence Transformer model and FAISS index for the given database,
+    using a cache to avoid reloading for the same database.
+    """
+    if db_name in _model_cache and db_name in _index_cache and db_name in _keys_cache:
+        return _model_cache[db_name], _index_cache[db_name], _keys_cache[db_name]
 
     config = DB_CONFIGS[db_name]
+    
     embedding_model = SentenceTransformer(config["embedding_model_name"])
     index = faiss.read_index(config["index_file"])
     with open(config["mapping_file"], "rb") as f:
         keys = pickle.load(f)
+
+    _model_cache[db_name] = embedding_model
+    _index_cache[db_name] = index
+    _keys_cache[db_name] = keys
+
     return embedding_model, index, keys
 
 
@@ -170,6 +167,8 @@ def ask():
     if db_name not in DB_CONFIGS:
         return jsonify({"error": f"Invalid database name: {db_name}"}), 400
 
+    connection = None
+    cursor = None
     try:
         connection = get_db_connection(db_name)  # get connection
         cursor = connection.cursor()  # create cursor
@@ -179,7 +178,7 @@ def ask():
         query_embedding = embedding_model.encode([user_input]).astype("float32")
         D, I = index.search(query_embedding, k=3)
 
-        if all(d > 0.56 for d in D[0]):
+        if D[0][0] > 0.59:
             return jsonify({"answer": "Nothing close found", "confidence": D[0].tolist()})
 
         result_key = keys[I[0][0]]
