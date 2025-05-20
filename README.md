@@ -68,7 +68,7 @@ DB_CONFIGS = {
 Start the Flask application:
 
 ```
-python app.py
+python ypdated-app.py
 ```
 
 The API will be available at `http://localhost:5000`.
@@ -87,7 +87,7 @@ Parameters:
 Example Request:
 ```json
 {
-  "message": "What is the population of New York?",
+  "message": "population of amor in 2019?",
   "database": "demo-dw-24-sample_main",
   "use_api": true
 }
@@ -97,14 +97,12 @@ Example Response:
 ```json
 {
   "answer": "8336817",
-  "query": "What is the population of New York?",
+  "query": "population of amor in 2019?",
   "matched_key": "1 5 24 12 1 0",
   "sql_query": "SELECT data_value FROM ut_data WHERE iusnid = 1 AND timeperiod_nid = 5 AND area_nid = 24 AND indicator_nid = 12 AND unit_nid = 1 AND subgroup_val_nid = 0",
   "confidence": [0.21, 0.35, 0.48],
   "database": "demo-dw-24-sample_main"
 }
 ```
-
-## License
-
-[Your License Here]
+## licence
+[yuvi]
