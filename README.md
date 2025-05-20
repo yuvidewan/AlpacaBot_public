@@ -68,7 +68,7 @@ DB_CONFIGS = {
 Start the Flask application:
 
 ```
-python ypdated-app.py
+python updated-app.py
 ```
 
 The API will be available at `http://localhost:5000`.
