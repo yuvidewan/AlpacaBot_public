@@ -82,23 +82,45 @@ def load_model_and_index(db_name):
     return embedding_model, index, keys
 
 
-def get_query(result_key):
+def get_query(result_key, c=0):
     """Constructs a SQL query to retrieve data based on the result key."""
     tb_c = ["iusnid", "timeperiod_nid", "area_nid", "indicator_nid", "unit_nid", "subgroup_val_nid"]
     result = result_key.split()
-    tb_query = "SELECT data_value FROM ut_data WHERE "
-    for i, col in enumerate(tb_c):  # Use enumerate for cleaner loop
-        tb_query += f"{col} = {result[i]}"
-        if i < len(tb_c) - 1:
-            tb_query += " AND "
+    
+    # Make sure we have the right number of values
+    if len(result) != len(tb_c):
+        raise ValueError(f"Expected {len(tb_c)} values in result_key, got {len(result)}")
+    
+    # Fix spacing in the query for the first case with the 'WHERE' clause
+    tb_query = "SELECT data_value FROM ut_data WHERE " if c == 1 else "SELECT data_value FROM data_view WHERE "
+    
+    conditions = []
+    for i, col in enumerate(tb_c):
+        # Special handling for empty or 'None' values
+        if not result[i] or result[i].lower() == 'none':
+            conditions.append(f"{col} IS NULL")
+            continue
+            
+        # Handle the value properly whether it's an integer or float
+        try:
+            # Check if the value is a float with decimal part
+            if '.' in result[i]:
+                val = float(result[i])
+                # For MySQL, we should cast to DECIMAL for exact representation
+                conditions.append(f"{col} = CAST({val} AS DECIMAL(65,30))")
+            else:
+                # Integer value case - parse to ensure it's valid
+                val = int(result[i])
+                conditions.append(f"{col} = {val}")
+        except ValueError:
+            # In case it's not a valid number, try to handle as string
+            # Using string replacement before formatting to avoid f-string backslash issues
+            safe_val = result[i].replace("'", "''")  # Escape single quotes for SQL
+            conditions.append(f"{col} = '{safe_val}'")
+    
+    tb_query += " AND ".join(conditions)
     return tb_query
 
-def get_view_query(result_key):
-    tb_c = ["iusnid", "timeperiod_nid", "area_nid", "indicator_nid", "unit_nid", "subgroup_val_nid"]
-    result = result_key.split()
-    query = "SELECT * FROM data_view WHERE "
-    query += " AND ".join([f"{col} = {result[i]}" for i, col in enumerate(tb_c)])
-    return query
 
 def generate_sentence_from_prompt_and_answer(prompt, answer):
     """
@@ -168,15 +190,50 @@ def ask():
             return jsonify({"answer": "Nothing close found", "confidence": D[0].tolist()})
 
         result_key = keys[I[0][0]]
-        tb_query = get_query(result_key)
-        cursor.execute(tb_query)
-        answer_row = cursor.fetchone()
+        
+        # result NID for checking and also in case of rollback to rpev ut_data version
+        print(f"Result key: {result_key}")
+
+        answer = None
+        tb_query = ""
+        try:
+            tb_query = get_query(result_key)
+            print(f"\nExecuting query: {tb_query}")
+            print("\n")
+            cursor.execute(tb_query)
+            answer_row = cursor.fetchone()
+
+            if answer_row and answer_row[0] is not None:
+                answer = answer_row[0]
+            else:
+                tb_query = get_query(result_key, 1)
+                print(f"Trying alternate query: {tb_query}")
+                cursor.execute(tb_query)
+                answer_row = cursor.fetchone()
+                if answer_row and answer_row[0] is not None:
+                    answer = answer_row[0]
+        except Exception as e:
+            print(f"Query error: {str(e)}")
+            print(f"Failed query: {tb_query}")
+            print(f"Result key: {result_key}")
+            return jsonify({
+                "error": f"Database query error: {str(e)}",
+                "matched_key": result_key,
+                "sql_query": tb_query if 'tb_query' in locals() else "Query not built",
+                "confidence": D[0].tolist(),
+                "database": db_name
+            }), 500
+
         connection.commit()
 
-        if not answer_row:
-            return jsonify({"answer": "No data found for matched key", "confidence": D[0].tolist()})
-
-        answer = answer_row[0]
+        if answer is None:
+            return jsonify({
+                "answer": "No data found for matched key", 
+                "matched_key": result_key,
+                "sql_query": tb_query if 'tb_query' in locals() else "Unknown",
+                "confidence": D[0].tolist(),
+                "database": db_name
+            })
 
         if use_api:
             sentence = generate_sentence_from_prompt_and_answer(user_input, answer)
@@ -194,12 +251,15 @@ def ask():
             "database": db_name
         })
     except Exception as e:
+        print(f"General error: {str(e)}")
         if connection:
             connection.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         if cursor:
             cursor.close()
+        if connection:
+            connection.close()
 
 if __name__ == "__main__":
     # Use environment variable for port with a default of 5000
